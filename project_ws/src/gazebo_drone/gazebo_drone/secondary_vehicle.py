@@ -42,6 +42,8 @@ aruco_parameters = cv2.aruco.DetectorParameters()
 # aruco detector
 aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_parameters)
 
+detected_markers = {}
+
 # camera calibration (camera matrix and distortion coefficients)
 # find by running our challenge_1 ros gazebo world and viewing ros2 topic list /camera/camera_image
 
@@ -109,7 +111,7 @@ secondary_vehicle.parameters['LAND_SPEED'] = 50 # in centimeters per second
 
 print('Connected to secondary vehicle!\n')
 
-################### PUB/SUB SECTION ###################
+################### SUB NODE SECTION ###################
 
 # publisher to publish the camera feed (type, topic, queue size)
 class ImageSub(Node):
@@ -138,11 +140,14 @@ class ImageSub(Node):
 
             if returned_ids[0] == target_ID: # if the ID found is the target ID     
 
+                if id not in detected_markers:
+                        detected_markers[id] = 1
+                        self.get_logger().info(f"\n********TARGET ARUCO DETECTED: {id}")
+                        print("Starting precision landing process.")
+
                 global detected 
                 detected = True
-
-                print("detected")
-
+                #print("detected")
 
                 # get the x and y distances from aruco's center
                 returned, rvec, tvec = cv2.solvePnP(aruco_points, corners[0], np_camera_matrix, np_distortion_co)
@@ -156,18 +161,18 @@ class ImageSub(Node):
                 # print("up/down distnace", Y)
 
                 if abs(Y) > 0.10 and abs(X) > 0.10:
-                    print("moving... diagonal")
+                    print("Moving... diagonal")
                     velocity_x = 0.1 if Y < 0 else -0.1
                     velocity_y = -0.1 if X < 0 else 0.1
                     send_velocity(velocity_x, velocity_y, 0.1)
                 
                 elif abs(Y) > 0.10 and abs(X) < 0.10:
-                    print("moving... up/down")
+                    print("Moving... up/down")
                     velocity = 0.1 if Y < 0 else -0.1
                     send_velocity(velocity, 0, .1)
                 
                 elif abs(X) > 0.10 and abs(Y) < 0.10:
-                    print("moving... left/right")
+                    print("Moving... left/right")
                     velocity = -0.1 if X < 0 else 0.1
                     send_velocity(0, velocity, 0.1)
                 else:
@@ -209,7 +214,7 @@ def receive_message():
 
         x = float(data_decoded[0])
         y = float(data_decoded[1])
-        print(f"received message: {x} {y}")
+        print(f"Received message from primary: {x:.2f} {y:.2f}")
 
         return x, y
     
@@ -316,7 +321,7 @@ def move_to_aruco(x, y):
      # i add 0.5 bc the drone typically undershoots
     control_drone_velocity(start_position, round(abs(x),2), velocity_x, 0, 0)
 
-    print("\nMoving right/left to aruco")
+    print("Moving right/left to aruco\n")
     # move left/right to aruco
     start_position = (secondary_vehicle.location.global_relative_frame.lat, secondary_vehicle.location.global_relative_frame.lon) # start position lat and lon
     velocity_y = -0.50 if y < 0 else 0.50

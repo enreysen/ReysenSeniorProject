@@ -38,6 +38,9 @@ aruco_parameters = cv2.aruco.DetectorParameters()
 # aruco detector
 aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_parameters)
 
+# dictionary for holding the detected markers.
+detected_markers = {}
+
 # camera calibration (camera matrix and distortion coefficients)
 # find by running our challenge_1 ros gazebo world and viewing ros2 topic list /camera/camera_image
 
@@ -90,13 +93,7 @@ aruco_points = np.array([
 class ImagePubSub(Node):
     def __init__(self):
         # create the publisher
-        super().__init__('image_pub_sub')
-        self.publisher = self.create_publisher(Image, '/camera/new_image', 10)
-
-        # ensure the frame rate is not too fast *****
-        # publish data every .1 second for a frame rate of 10 per second
-        duration = 1#0.1
-        self.timer = self.create_timer(duration, self.timer_callback)
+        super().__init__('image_sub_1')
 
          # create the subscriber
         self.subscriber = self.create_subscription(Image, '/camera/image_raw', self.callback, 10)
@@ -122,11 +119,14 @@ class ImagePubSub(Node):
         (corners, returned_ids, rejected) = aruco_detector.detectMarkers(gray_image)
 
         if returned_ids is not None: # if an ID is found
+            id = int(returned_ids[0])
 
-            if returned_ids[0] == target_ID: # if the ID found is the target ID     
+            if id == target_ID: # if the ID found is the target ID     
                 # get the distance of the drone from the marker
                 # draw the axes on the marker (or a square, your choice...)
-                self.get_logger().info(f'********TARGET MARKER SPOTTED: {returned_ids[0]}')
+                if id not in detected_markers:
+                    detected_markers[id] = 1
+                    self.get_logger().info(f'********TARGET MARKER SPOTTED: {id}')
 
                 # get the x and y distances from aruco's center
                 returned, rvec, tvec = cv2.solvePnP(aruco_points, corners[0], np_camera_matrix, np_distortion_co)
@@ -134,7 +134,7 @@ class ImagePubSub(Node):
                 x_distance_center = tvec[0]
                 y_distance_center = tvec[1]
 
-                self.get_logger().info(f'********DRONE DISTANCE FROM CENTER OF ARUCO: LEFT/RIGHT:{x_distance_center} UP/DOWN:{y_distance_center}')
+                self.get_logger().info(f'********DRONE DISTANCE FROM CENTER OF ARUCO: LEFT/RIGHT:{x_distance_center[0]:.2f} UP/DOWN:{y_distance_center[0]:.2f}')
                 
                 # return to launch/precision land
                 upon_detection(y_distance_center[0], x_distance_center[0])
@@ -142,19 +142,9 @@ class ImagePubSub(Node):
 
 
             else: 
-                self.get_logger().info(f"********Marker detected, but not target marker: {returned_ids[0]}")
-
-        else: 
-            if threshold > 10:
-                #self.get_logger().info("No markers detected yet....")
-                threshold == 0
-
-
-
-        # publish the image to the new topic
-        # we need to convert the OpenCV image to a ROS2 message
-        new_msg = bridge.cv2_to_imgmsg(np_data, encoding='rgb8') # color image with blue-green-red order
-        self.publisher.publish(new_msg) # now we can publish the message! 
+                if id not in detected_markers:
+                    detected_markers[id] = 1
+                    self.get_logger().info(f"********Marker detected, but not target marker: {id}")
 
 
 
@@ -368,12 +358,12 @@ def upon_detection(add_x_distance, add_y_distance):
     print("\nAruco Marker was detected. Initiating landing procedure.")
 
     # combine the distances for a more accurate distance for the drone to travel
-    print(f"***X_travelled: {x_travelled}")
-    print(f"***Y_travelled: {y_travelled}")
+    print(f"***X_travelled: {x_travelled:.2f}")
+    print(f"***Y_travelled: {y_travelled:.2f}")
     total_x = -add_x_distance + x_travelled
     total_y = add_y_distance + y_travelled
 
-    print(f"Sending secondary drone to travel {total_x} up and {total_y} left/right")
+    print(f"Sending secondary drone to travel {total_x:.2f} up and {total_y:.2f} left/right")
 
     # send message to primary drone
     send_message(total_x, total_y) # send message after moving forward
@@ -383,7 +373,7 @@ def upon_detection(add_x_distance, add_y_distance):
     send_message(total_x, total_y) # send message after moving forward
 
     # go to edge of field
-    print(f'Moving off the field.... Flying {9 - x_travelled} m forward')
+    print(f'Moving off the field.... Flying {(9 - x_travelled):.2f} m forward')
     start_position = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon) # start position lat and lon
     distance_travelled = 0
     target_distance = 9 - x_travelled
