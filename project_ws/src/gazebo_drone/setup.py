@@ -17,13 +17,7 @@ setup(
         ('share/' + package_name + '/worlds', ['worlds/challenge_3.world']),
         ('share/' + package_name + '/worlds', ['worlds/challenge_2.world']),
         ('share/' + package_name + '/launch', ['launch/test.py']),
-        ('share/' + package_name + '/worlds', ['worlds/test.world']),
-        ('share/' + package_name + '/launch', ['launch/parking.py']),
-        ('share/' + package_name + '/worlds', ['worlds/parking_lot.world']),
-        ('share/' + package_name + '/launch', ['launch/launch_slam.py']),
-        ('share/' + package_name + '/worlds', ['worlds/slam.world']),
-        ('share/' + package_name + '/launch', ['launch/test_launch_1.py']),
-        ('share/' + package_name + '/worlds', ['worlds/test_challenge_1.world'])
+        ('share/' + package_name + '/worlds', ['worlds/test.world'])
     ],
 
     zip_safe=True,
