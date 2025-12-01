@@ -1,23 +1,9 @@
 #!/usr/bin/env python3 
 
-"""
-
-Challenge 2 Flight Path Logic for UAV 1
-
-Challenge 2:
-    Autonomously search the field with a UAV to find the target aruco marker
-    Upon finding the target marker, output that it was found, and direct the secondary vehicle to travel to the marker.
-    Then, fly off the field and land.
-
-    If the Aruco marker was not found, the flight path will finish, output the marker was not found, and then move off the field and land.
-
-    
-"""
-
 # aruco tracking and primary vehicle flight path in one
 # this is because I needed to use a function 'upon_detection' once the aruco marker was found
 import sys
-from dronekit import connect
+from dronekit import connect, VehicleMode, LocationGlobalRelative, LocationGlobal
 from pymavlink import mavutil
 
 import time
@@ -36,7 +22,8 @@ import cv2 # for detecting aruco markers using computer vision
 
 from sensor_msgs.msg import Image # message type for our topic we are publishing/subscribing (new_image)
 
-from cv_bridge import CvBridge # for the bridge between computer vision and ros2
+import cv_bridge # for the bridge between computer vision and ros2
+from cv_bridge import CvBridge
 
 
 
@@ -83,7 +70,9 @@ distortion_co = [0.0, 0.0, 0.0, 0.0, 0.0]
 np_distortion_co  = np.array(distortion_co) # convert to numpy array
 
 
-target_ID = 72 # target aruco marker ID
+target_ID = 72 #129 # target aruco marker ID
+
+threshold = 0 
 
 marker_length = 0.3048 # 1 ft
 
@@ -95,26 +84,36 @@ aruco_points = np.array([
     ]
     )
 
-detected_markers = {}
-
 ################### PUB/SUB SECTION ###################
 
 # publisher to publish the camera feed (type, topic, queue size)
-class ImageSub(Node):
+class ImagePubSub(Node):
     def __init__(self):
         # create the publisher
-        super().__init__('image_sub')
+        super().__init__('image_pub_sub')
+        self.publisher = self.create_publisher(Image, '/camera/new_image', 10)
+
+        # ensure the frame rate is not too fast *****
+        # publish data every .1 second for a frame rate of 10 per second
+        duration = 1#0.1
+        self.timer = self.create_timer(duration, self.timer_callback)
 
          # create the subscriber
         self.subscriber = self.create_subscription(Image, '/camera/image_raw', self.callback, 10)
         self.subscriber
 
+    def timer_callback(self):  
+        mssg = Image()          
+        #self.get_logger().info('Publishing data to /camera/new_image')
+        self.publisher.publish(mssg) # publish the message
+
+
     def callback(self, message):
+        #self.get_logger().info(f'Retrieving camera/image_raw data')
         bridge = CvBridge()
         
         # convert ROS Image message to OpenCV iamge
         np_data = bridge.imgmsg_to_cv2(message, desired_encoding='rgb8') # convert ROS Image message to openCV Image (which is a numpy array)
-
         # get image and convert to grayscale for better accuracy
         gray_image = cv2.cvtColor(np_data, cv2.COLOR_BGR2GRAY)
     
@@ -123,54 +122,66 @@ class ImageSub(Node):
         (corners, returned_ids, rejected) = aruco_detector.detectMarkers(gray_image)
 
         if returned_ids is not None: # if an ID is found
-            id = int(returned_ids[0])
 
-            if id == target_ID: # if the ID found is the target ID     
-                self.get_logger().info(f'********TARGET MARKER SPOTTED: {id}')
+            if returned_ids[0] == target_ID: # if the ID found is the target ID     
+                # get the distance of the drone from the marker
+                # draw the axes on the marker (or a square, your choice...)
+                self.get_logger().info(f'********TARGET MARKER SPOTTED: {returned_ids[0]}')
 
                 # get the x and y distances from aruco's center
                 returned, rvec, tvec = cv2.solvePnP(aruco_points, corners[0], np_camera_matrix, np_distortion_co)
 
-                x_distance_center = tvec[1]
-                y_distance_center = tvec[0]
+                x_distance_center = tvec[0]
+                y_distance_center = tvec[1]
 
                 self.get_logger().info(f'********DRONE DISTANCE FROM CENTER OF ARUCO: LEFT/RIGHT:{x_distance_center} UP/DOWN:{y_distance_center}')
                 
                 # return to launch/precision land
                 upon_detection(y_distance_center[0], x_distance_center[0])
-
-                # once the target marker is found, we want to get off the field and land
-                upon_detection()
                 rclpy.shutdown()
 
+
             else: 
-                # I add the id to the dictionary so that the below messaage is not printed to the screen more than once.
-                if id not in detected_markers: # if it has not already been found, output its id
-                    detected_markers[id] = 1
-                    self.get_logger().info(f"********Marker detected, but not target marker: {id}")
+                self.get_logger().info(f"********Marker detected, but not target marker: {returned_ids[0]}")
+
+        else: 
+            if threshold > 10:
+                #self.get_logger().info("No markers detected yet....")
+                threshold == 0
 
 
 
-################### VARIABLES FOR FLIGHT PATH SECTION ###################
+        # publish the image to the new topic
+        # we need to convert the OpenCV image to a ROS2 message
+        new_msg = bridge.cv2_to_imgmsg(np_data, encoding='rgb8') # color image with blue-green-red order
+        self.publisher.publish(new_msg) # now we can publish the message! 
+
+
 
 # connect the primary vehicle to the SITL
 print('Connecting to primary vehicle...') # with I1 tag
 
 # set up the vehicle with drone kit
 primary_vehicle = connect("udp:127.0.0.1:14550", wait_ready = True) # was tcp:127.0.0.1:5763
-primary_vehicle.parameters['LAND_SPEED'] = 50 # land speed in centimeters per second
+primary_vehicle.parameters['PLND_ENABLED'] = 1
+primary_vehicle.parameters['PLND_ENABLED'] = 1
+primary_vehicle.parameters['PLND_ENABLED'] = 0
+primary_vehicle.parameters['LAND_SPEED'] = 50 # in centimeters per second
 
 print('Connected to primary vehicle!\n')
 
-# save how far the drone has travelled in the x-axis and y-axis
+takeoff_altitude = 3 # at 18 meters I could see all the markers but uhhhhh -- was at 2
+
 x_travelled = 0
+
 y_travelled = 0
 
-global sub_node
+global pub_sub
 
 global detected
 detected = False
 
+spotted = {}
 
 ################### FUNCTIONS SECTION ###################
 
@@ -195,8 +206,6 @@ def send_message(x_travel, y_travel):
 
 # function to initiate takeoff
 def takeoff():
-    takeoff_altitude = 3 
-
     # ensure drone is armable
     print('Waiting for the drone to become armable...')
 
@@ -217,7 +226,7 @@ def takeoff():
     # arm the drone
     if primary_vehicle.armed != True:
         primary_vehicle.armed = True
-        print('\nArming the drone...')
+        print('Arming the drone...')
         while primary_vehicle.armed != True:
             time.sleep(1)
 
@@ -247,9 +256,7 @@ def send_velocity(vel_x, vel_y, vel_z):
     global x_travelled
     global y_travelled
     x_travelled += vel_x / 10 # we send this message every .1 second. if drone is flying 0.5 m/s for example, we need to 1/10 of it for our estimation
-    #print(x_travelled)
     y_travelled += vel_y / 10 
-    #print(y_travelled)
     message = primary_vehicle.message_factory.set_position_target_local_ned_encode(
         0,# time_boot_ms -- we don't use this
         0,# target system
@@ -270,81 +277,81 @@ def send_velocity(vel_x, vel_y, vel_z):
 
 # command the drone to fly at a particular velocity until target distance is reached
 def control_drone_velocity(start_position, target_distance, vel_x, vel_y, vel_z):
-    current_location = get_current_position()
+    current_location = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon)
 
     distance_travelled = 0
     print_time = time.time()
     
     # send command to vehicle every second (1 hz) until we reach desired distance
     while (distance_travelled < target_distance * 0.95): # threshold so drone stops on time
-        current_location = get_current_position()
+        current_location = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon)
         distance_travelled = (haversine(start_position, current_location, Unit.KILOMETERS)) * 1000
 
 
         if (time.time() - print_time > 1):
-            #print(f"\tDistance from target: {(target_distance - distance_travelled):2f}")
+            #print(f"\tDistance from target: {target_distance - distance_travelled}")
             print_time = 0
 
         
-        rclpy.spin_once(sub_node) # spin while moving
+        rclpy.spin_once(pub_sub) # spin only once.
+        time.sleep(0.1)
         
         send_velocity(vel_x, vel_y, vel_z)
-        time.sleep(0.1) # buffer time
 
 
     send_velocity(0,0,0) # stop the drone when target destination is reached
 
-# return drone's current lat aand long
-def get_current_position():
-    return (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon)
 
 # send drone to specific points within the field
 def flight_path():
     print("INITIATING FLIGHT PATH")
     time.sleep(1)
 
-    # I used the 'spiral' flight path here, as it was the fastest of the three I creaated (diagonal, spirl, and lawnmower)
-    # I found that to fly in a stable manner, I needed to travel no more than 0.5 m/s in any axis
-    speed = 0.5
 
-    # move up 
-    print("Moving ~8 meters up.")
-    control_drone_velocity(get_current_position(), 8, speed, 0, 0)
+    # move up ~1 m
+    start_position = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon) # start position lat and lon
+    control_drone_velocity(start_position, 0.30, 0.5, 0, 0)
 
-    print("Moving ~6 meters right.")
-    # move right
-    control_drone_velocity(get_current_position(), 5.8, 0, speed, 0)
+    for i in range(2):
+        # move to the right ~7 meters
+        start_position = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon) # start position lat and lon
+        control_drone_velocity(start_position, 6.5, 0, 0.5, 0)
 
-    print("Moving ~ 7 meters down.")
-    # move down
-    control_drone_velocity(get_current_position(), 7, -speed, 0, 0)
+        # move up ~2 m
+        start_position = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon) # start position lat and lon
+        control_drone_velocity(start_position, 1.25, 0.5, 0, 0)
 
-    print("Moving ~ 3 meters left.")
-    # move left
-    control_drone_velocity(get_current_position(), 2.8, 0, -speed, 0)
+        # move to the left ~7 meters
+        start_position = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon) # start position lat and lon
+        control_drone_velocity(start_position, 6.5, 0, -0.5, 0)
 
-    print("Moving ~ 5 meters up.")
-    # move up
-    control_drone_velocity(get_current_position(), 5.7, speed, 0, 0)
-    
-    print("Drone finished flight path, moving off the field")
+        # move up ~2 m
+        start_position = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon) # start position lat and lon
+        control_drone_velocity(start_position, 1.25, 0.5, 0, 0)
 
-    # move off field
-    target_distance = 3
-    control_drone_velocity(get_current_position(), target_distance, speed, 0, 0)
+
+    # move to the right ~7 meters
+    start_position = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon) # start position lat and lon
+    control_drone_velocity(start_position, 6.5, 0, 0.5, 0)
+
+    # move up ~1 m
+    start_position = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon) # start position lat and lon
+    control_drone_velocity(start_position, 0.75, 0.5, 0, 0)
+
+    print("ARUCO NOT FOUND :(")
     
 
 def land():
     print("INITIATING LANDING")
     # set to land mode
-    print('Waiting for the drone to be in LAND mode...')
     if primary_vehicle.mode != "LAND":
         primary_vehicle.mode = "LAND"
         while primary_vehicle.mode != "LAND":
+            print('Waiting for the drone to be in LAND mode...')
             time.sleep(1)
 
         print("Initating landing!")
-        while primary_vehicle.location.global_relative_frame.alt > 0.03:
+        while primary_vehicle.location.global_relative_frame.alt > 0:
             print("\tLanding..")
             time.sleep(1)
 
@@ -353,7 +360,7 @@ def land():
         sys.exit()
 
 
-# pass in the x distance from the center of the aruco and the y distance from center of arcuo
+# pass in the x distance from the center of the aruco and the y distance (as x_distance) from center of arcuo
 def upon_detection(add_x_distance, add_y_distance):
     global x_travelled
     global y_travelled
@@ -361,12 +368,12 @@ def upon_detection(add_x_distance, add_y_distance):
     print("\nAruco Marker was detected. Initiating landing procedure.")
 
     # combine the distances for a more accurate distance for the drone to travel
-    print(f"***X_travelled: {x_travelled:.2f}")
-    print(f"***Y_travelled: {y_travelled:.2f}")
-    total_x = add_x_distance + x_travelled
+    print(f"***X_travelled: {x_travelled}")
+    print(f"***Y_travelled: {y_travelled}")
+    total_x = -add_x_distance + x_travelled
     total_y = add_y_distance + y_travelled
 
-    print(f"Sending secondary drone to travel {total_x:2f} up and {total_y:2f} left/right")
+    print(f"Sending secondary drone to travel {total_x} up and {total_y} left/right")
 
     # send message to primary drone
     send_message(total_x, total_y) # send message after moving forward
@@ -376,14 +383,14 @@ def upon_detection(add_x_distance, add_y_distance):
     send_message(total_x, total_y) # send message after moving forward
 
     # go to edge of field
-    print(f'Moving off the field.... Flying {(9 - x_travelled):2f} m forward')
-    start_position = get_current_position()
+    print(f'Moving off the field.... Flying {9 - x_travelled} m forward')
+    start_position = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon) # start position lat and lon
     distance_travelled = 0
     target_distance = 9 - x_travelled
     
     # send command to vehicle every second (1 hz) until we reach desired distance
     while (distance_travelled < target_distance * 0.95): # threshold so drone stops on time
-        current_location = get_current_position()
+        current_location = (primary_vehicle.location.global_relative_frame.lat, primary_vehicle.location.global_relative_frame.lon)
         distance_travelled = (haversine(start_position, current_location, Unit.KILOMETERS)) * 1000
 
         time.sleep(0.1)
@@ -397,17 +404,15 @@ def upon_detection(add_x_distance, add_y_distance):
     land()
 
 def main(args = None):
-    global sub_node
+    global pub_sub
     # initalize rclpyp
     rclpy.init(args=args)
-    sub_node = ImageSub() # create the pubsub
+    pub_sub = ImagePubSub() # create the pubsub
 
     takeoff()
     time.sleep(1)
     flight_path()
-    print("Primary finished flight path. Aruco marker not found.")
     land()
-    
+    print("Primary finished flight path.")
 
-# initiate main
-if __name__ == '__main__': main()
+main()
