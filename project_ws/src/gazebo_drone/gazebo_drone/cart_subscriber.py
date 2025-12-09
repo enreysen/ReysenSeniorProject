@@ -1,14 +1,27 @@
+"""
+
+
+For Challenge 3 Flight Path Logic
+
+Subscribes to cmd_vel to retreive the cart velocity from gazebo model
+
+  
+"""
+
 # messages must be in geometry_msgs/msg/Twist
 # topic name: cmd_vel
 
-import math
-import time
-import rclpy
-from rclpy.node import Node
-from nav_msgs.msg import Odometry
-import socket
+import math # to calculate total velocity
 
-#0.089408  # velocity in x-direction (linear) 0.089408 is around .2 mph
+import time # for buffer time
+
+from rclpy.node import Node # to create subscriber node
+
+from nav_msgs.msg import Odometry # Odometry message type
+
+import socket # for sending message to drone
+
+# velocity in x-direction (linear) 0.089408 is around .2 mph
 
 """
     Example output from /cart/odom
@@ -27,15 +40,14 @@ class CartSubNode(Node):
         self.subscriber = self.create_subscription(Odometry, '/cart/odom', self.callback, 10)
 
 
-# need to achieve at least velocity of 0.089408 m/s
+    # need to achieve at least velocity of 0.089408 m/s
     def callback(self, message):
         velocity_msg_x = message.twist.twist.linear.x
         velocity_msg_y = message.twist.twist.linear.y
         velocity_msg_z = message.twist.twist.linear.z
 
         total_velocity = math.sqrt(velocity_msg_x**2 + velocity_msg_y**2)
-
-        #print(f"Cart's total velocity: {total_velocity:.2f} m\s")
+        print(f"Cart's total velocity: {total_velocity:.2f} m\s")
 
         # send velocities as a message for the drone to use
         # create the message
@@ -51,7 +63,7 @@ class CartSubNode(Node):
         time.sleep(0.3) # some buffer time
 
 
-# uncomment below if you want to test the node without running mission_3.py
+# uncomment below if wanting to test the node without running mission_3.py
 # def main():
 #     rclpy.init()
 #     cart = CartSubNode()

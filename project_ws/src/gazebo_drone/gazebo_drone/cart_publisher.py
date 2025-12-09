@@ -1,7 +1,16 @@
+"""
+
+
+For Challenge 3 Flight Path Logic
+
+Publishes velocity for ground vehicle to travel. Must travel at a minimum of 0.2 mph, or 0.089408 m/s
+
+  
+"""
+
 # messages must be in geometry_msgs/msg/Twist
 # topic name: cmd_vel
 
-import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 
@@ -22,15 +31,17 @@ class CartNode(Node):
             # check if it has recieved a message. if so, set the velocities to those numbers
 
             # if not, publish the regular velocity of 1.2
-            velocity_msg = Twist() # publish messaage for cart (takes message of type Twist)
+            velocity_msg = Twist() # messaage for cart (takes message of type Twist)
 
             velocity_msg.linear.x = -1.2
             velocity_msg.linear.y = 0.0 
             velocity_msg.linear.z = 0.0
 
+            # publish the message
             self.publisher.publish(velocity_msg)
 
 
+# uncomment below if wanting to test the node without running mission_3.py
 # def main():
 #     rclpy.init()
 #     cart = CartNode()

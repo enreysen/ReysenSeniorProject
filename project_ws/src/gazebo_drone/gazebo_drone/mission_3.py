@@ -10,40 +10,61 @@ Challenge 3:
 
     Upon detecting the ground vehicle, the drone will perform a precision landing.
 
+    
 """
 
-import socket
 import rclpy # ros2 package
+
 import numpy as np # for turing the image array into numpy arrays
+
 import cv2 # for detecting aruco markers using computer vision
-import sys # in case we need to quit the program prematurely
+
+import sys # for exiting the script
+
 import time # for helping with creating realistic frame rate
+
 from cv_bridge import CvBridge # for the bridge between computer vision and ros2
-from dronekit import connect
-from pymavlink import mavutil
+
+from dronekit import connect # the dronekit API assists with communicating with the ArduPilot flight controller firmware
+
+from pymavlink import mavutil # the paymavlink API assists with creating custom MAVLink messages to send to ArduPIlot
+
 from sensor_msgs.msg import Image # message type for our topic we are publishing/subscribing (new_image)
-from rclpy.node import Node
-import threading
-from cart_publisher import CartNode
-from cart_subscriber import CartSubNode
+
+from rclpy.node import Node # for creating publisher and subscriber nodes
+
+import threading # for spinning the ImageSub node and running the main script
+
+from cart_publisher import CartNode # publishes velocity for the cart to travel at
+
+from cart_subscriber import CartSubNode # retreives cart's current velocity
+
 from rclpy.executors import MultiThreadedExecutor # using threading for spinning multiple nodes
+
+import socket # for sending/recieving messages
 
 
 
 ################### VARIABLES SECTION ###################
 
+
+
 # set up the vehicle with drone kit
 print('Connecting to drone...')
 drone_vehicle = connect("tcp:127.0.0.1:5763", wait_ready = True)
-drone_vehicle.parameters['LAND_SPEED'] = 50 # in centimeters per second
 print('Connected.')
 
-target_ID = 72  # target aruco marker ID
+# target aruco marker ID
+target_ID = 72  
 
+# holds whether target marker was found
 detected = False
 
 
+
 ################### VARIABLES FOR ARUCO DETECTION ###################
+
+
 
 # specify aruco dictionary
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_ARUCO_ORIGINAL) 
@@ -87,8 +108,9 @@ np_distortion_co  = np.array(distortion_co) # convert to numpy array
 
 threshold = 0 
 
-marker_length = 0.15 #0.3048 # 1 ft
+marker_length = 0.15 # 0.15 m
 
+# for estimating camera distance from target marker 
 aruco_points = np.array([
     [-marker_length/2, marker_length/2, 0], 
     [marker_length/2, marker_length/2, 0],
@@ -97,15 +119,18 @@ aruco_points = np.array([
     ]
     )
 
-
-# Create a UDP socket
+# create a UDP socket for receiving message from cart
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # internet, udp
 sock.bind(('127.0.0.1', 14650))
 sock.settimeout(0.01) # maximum time to wait for receiving data
 
-################### PUB/SUB SECTION ###################
 
-# publisher to publish the camera feed (type, topic, queue size)
+
+################### SUBSCRIBER SECTION ###################
+
+
+
+# subscriber to retreive the camera feed (type, topic, queue size)
 class ImageSub(Node):
     def __init__(self):
          # create the subscriber
@@ -119,6 +144,7 @@ class ImageSub(Node):
         
         # convert ROS Image message to OpenCV iamge
         np_data = bridge.imgmsg_to_cv2(message, desired_encoding='rgb8') # convert ROS Image message to openCV Image (which is a numpy array)
+        
         # get image and convert to grayscale for better accuracy
         gray_image = cv2.cvtColor(np_data, cv2.COLOR_BGR2GRAY)
     
@@ -126,8 +152,7 @@ class ImageSub(Node):
         # get the corners of the aruco markers and the IDs that it returned with detectMarkers function
         (corners, returned_ids, rejected) = aruco_detector.detectMarkers(gray_image)
 
-        # retrieve message from cart
-
+        # try to retrieve message from cart
         try:
             data, address = sock.recvfrom(1024) # buffer size of 1024
 
@@ -137,22 +162,31 @@ class ImageSub(Node):
             cart_x_velocity  = abs(float(data_decoded[0]))
             cart_y_velocity = abs(float(data_decoded[1]))
             print(f"Received velocity message from cart: \n\t{cart_x_velocity} m/s in x-axis, \n\t{cart_y_velocity} m/s in y-axis")
-                
+        
+        # if failed, output didn't receive message
+        # sets velocity of drone to a safe velocity option (0.1 m/s)
         except socket.timeout:
             #print("Didn't recieve velocity message from cart. Setting x_velocity to .1 m/s.")
             cart_x_velocity = 0.1
-            cart_y_velocity = 0.0
+            cart_y_velocity = 0.0 # the y velocity should be zero for challenge 1
 
+        # threshold for distance between marker and center of camera
         threshold = 0.10
+
+        # velocity for z axis to descend
         descending = 0.10
 
+        # velocitys to move faster than the cart
         faster_x = cart_x_velocity + 0.1
         faster_y = cart_y_velocity + 0.1
 
-        if returned_ids is not None: # if an ID is found
+        # if an ID is found
+        if returned_ids is not None: 
 
-            if returned_ids[0] == target_ID: # if the ID found is the target ID
+            # if the ID found is the target ID
+            if returned_ids[0] == target_ID: 
                 detected = True
+                
                 self.get_logger().info(f'*****LAND ZONE IN SIGHT')
 
                 # get the x and y distances from aruco's center
@@ -161,11 +195,9 @@ class ImageSub(Node):
                 # calculate Xerror/distance between camera and aruco (in centimeters)
                 X = round(tvec[0][0], 2) # left/right distance
                 Y = round(tvec[1][0], 2) # up/down distance
-                Z = round(tvec[2][0], 2)
 
                 #print(f"left/right distance from aruco, {X} m")
                 #print(f"up/down distance from aruco {Y} m")
-                #print(f"Z DISTANCE FROM ARUCO", Z)
 
                 print('\nALTITUDE', drone_vehicle.location.global_relative_frame.alt)
 
@@ -182,45 +214,45 @@ class ImageSub(Node):
                     #print("moving... up/down")
                     # if drone is ahead, slow down
                     send_velocity(faster_x if Y < 0 else 0.05, cart_y_velocity, 0.1)
-
                 
                 # if left/right is less than and up/down is greater,
                 # move faster than cart in y axis but same in x axis
                 elif abs(X) > threshold and abs(Y) < threshold:
                     #print("moving... left/right")
                     send_velocity(cart_x_velocity, -faster_y if X < 0 else faster_y, descending)
+
                 # otherwise, move at the x and y axis velocities and descend.
                 else:
                     #print("directly overhead aruco!")
                     send_velocity(cart_x_velocity, cart_y_velocity, descending)
 
                 time.sleep(0.3) # some buffer time so its not too shakey
-
-
+        
+        # if a marker was not found
         else:
+            # if the marker was detected and its altitude is less than 0.8 m and the altitude is greater than 0.4 m
+            # then keep moving forward with the cart and descend a bit faster
             if detected:
                 if drone_vehicle.location.global_relative_frame.alt < 0.8 and drone_vehicle.location.global_relative_frame.alt > 0.4:
                     print('LANDING...')
                     send_velocity(cart_x_velocity + 0.08, cart_y_velocity, 0.2)
+                
+                # if the altitude is less than 0.4, then the drone landed on the platform
                 elif drone_vehicle.location.global_relative_frame.alt < 0.4:
                     landed_on_platform()
 
-                        
-            else:
-                if detected == True:
-                    print("**************LOST SIGHT OF ARUCO MARKER.")
-                    send_velocity(cart_x_velocity, cart_y_velocity, 0.2)
-                    time.sleep(0.1)
 
 
 ################### FUNCTIONS SECTION ###################
 
 
+
 # send a message that forcibly disarms the drone
+# we need to do this because the drone is not acknowledging that it has landed despite it's altitude reflecting otherwise
+# this is because the drone is still moving on the cart, and so ArduPilot perceives the drone as still moving
 def force_disarm_vehicle():
-    # force disarm the vehicle
-    # we need to do this because the drone is not acknowledging that it has landed despite it's altitude reflecting otherwise
-    # this is because the drone is still moving on the cart, and so ArduPilot perceives the drone as still moving
+
+    # create and send message to force disarm the vehicle
     drone_vehicle.message_factory.command_long_send(
         0, # target system
         0, # target_component
@@ -235,6 +267,7 @@ def force_disarm_vehicle():
         0, # not used
     )
 
+
 # called when the drone lands on the platform
 def landed_on_platform():
     global executor
@@ -242,7 +275,7 @@ def landed_on_platform():
 
     print("\n*******************LANDED ON PLATFORM*******************")
     # stop moving in all axises
-    # end this message multiple times to ensure the drone stops
+    # send this message multiple times to ensure the drone stops
     for i in range (3):
         send_velocity(0,0,0)
 
@@ -253,13 +286,12 @@ def landed_on_platform():
         time.sleep(0.5)
 
     print("Drone disarmed.")
-    drone_vehicle.close()
+    drone_vehicle.close() # disconnect vehicle from ArduPilot
 
     # shut down all nodes
     executor.shutdown()
     rclpy.shutdown()
 
-    challenge_thread.join()
     sys.exit()
     print("System exit.")
 
@@ -267,7 +299,8 @@ def landed_on_platform():
 # function to initiate takeoff
 def takeoff():
     # altitude to take off
-    takeoff_altitude = 3 # must takeoff at a minimum of 4 feet, which is about 1.2 meters.
+    # must takeoff at a minimum of 4 feet, which is about 1.2 meters.
+    takeoff_altitude = 3 
 
     # ensure drone is armable
     print('\nWaiting for the drone to become armable...')
@@ -299,9 +332,9 @@ def takeoff():
 
     # takeoff
     drone_vehicle.simple_takeoff(takeoff_altitude)
-    # primary taking off
-
     print("Taking off!")
+
+    # output altitude while taking off
     while True:
         print(f'\tRising in altitude, currently at {abs(drone_vehicle.location.global_relative_frame.alt):.2f} m') # abs() because sometimes drone outputs negative altitude
 
@@ -342,7 +375,7 @@ def send_velocity(vel_x, vel_y, vel_z):
 def flight_path():
     time.sleep(1)
 
-    # wait 5 seconds before moving forward
+    # wait 5 seconds before moving forward, as per challenge requirements
     for i in range(1, 6):
         print(f"Moving forward in {i}...")
         time.sleep(1)
@@ -371,8 +404,11 @@ def main():
     aruco_node = ImageSub()
     cart_sub_node = CartSubNode()
 
+    # for spinning multiple nodes at once
     global executor
     executor = rclpy.executors.MultiThreadedExecutor()
+
+    # add nodes to the executor
     executor.add_node(cart_node)
     executor.add_node(aruco_node)
     executor.add_node(cart_sub_node)
@@ -381,6 +417,8 @@ def main():
     takeoff()
 
     print("\nTakeoff Complete. Sending instruction to cart, then waiting 5 seconds...")
+
+    # start thread that will have drone move forward
     challenge_thread.start()
 
     # spin the executor unless the user cancels it
@@ -399,5 +437,6 @@ def main():
         
 
 # initiate main
-if __name__ == '__main__': main()
+if __name__ == '__main__': 
+    main()
 
